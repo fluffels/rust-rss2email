@@ -1,0 +1,7 @@
+[package]
+name = "rss2email"
+version = "0.1.0"
+authors = ["Jan CW Kroeze <jcwkroeze@pm.me>"]
+edition = "2018"
+
+[dependencies]
