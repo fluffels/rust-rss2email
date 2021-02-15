@@ -6,6 +6,9 @@ extern crate xml;
 
 use sendgrid::Mail;
 use sendgrid::SGClient;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use xml::reader::EventReader;
 use xml::reader::XmlEvent;
 
@@ -27,6 +30,23 @@ struct Args {
     cmd_remove: bool,
 }
 
+#[derive(Hash)]
+struct Item {
+    desc: String,
+    link: String,
+    title: String
+}
+
+impl Item {
+    fn new() -> Item {
+        Item {
+            desc: "".to_string(),
+            link: "".to_string(),
+            title: "".to_string()
+        }
+    }
+}
+
 fn connect() -> sqlite::Connection {
     let conn = sqlite::open("db").unwrap();
 
@@ -34,6 +54,13 @@ fn connect() -> sqlite::Connection {
         CREATE TABLE IF NOT EXISTS feeds (
             pk INTEGER PRIMARY KEY,
             url TEXT NOT NULL
+        )
+    ").unwrap();
+
+    conn.execute("
+        CREATE TABLE IF NOT EXISTS items (
+            pk INTEGER PRIMARY KEY,
+            hash TEXT NOT NULL
         )
     ").unwrap();
 
@@ -66,13 +93,11 @@ fn list() {
     }).unwrap();
 }
 
-fn poll(client: &SGClient, url: &str) {
-    let resp = reqwest::blocking::get(url).unwrap();
+fn poll(client: &SGClient, url: String) {
+    let resp = reqwest::blocking::get(&url).unwrap();
     let body = resp.text().unwrap();
     let parser = EventReader::new(body.as_bytes());
-    let mut title = String::new();
-    let mut link = String::new();
-    let mut desc = String::new();
+    let mut item = Item::new();
     let mut el = String::new();
     for event in parser {
         match event {
@@ -81,34 +106,64 @@ fn poll(client: &SGClient, url: &str) {
             },
             Ok(XmlEvent::CData(text)) | Ok(XmlEvent::Characters(text)) => {
                 if el == "title" {
-                    title = text;
+                    item.title = text;
                 } else if el == "description" {
-                    desc = text;
+                    item.desc = text;
                 } else if el == "link" {
-                    link = text;
+                    item.link = text;
                 }
             },
             Ok(XmlEvent::EndElement { name }) => {
                 if name.local_name == "item" {
-                    let subject = format!("
-                        [rss2email] {}
-                    ", title);
-                    let text = format!("
-                        <div>
-                            <h1>
-                                <a href='{}'>{}</a>
-                            </h1>
-                            <p>
-                                {}
-                            </p>
-                        </div>
-                    ", link, title, desc);
-                    let mail = Mail::new()
-                        .add_from("jcwkroeze@pm.me")
-                        .add_text(&text)
-                        .add_subject(&subject)
-                        .add_to(("jcwkroeze@pm.me", "Jan CW Kroeze").into());
-                    client.send(mail).unwrap();
+                    let mut hasher = DefaultHasher::new();
+                    item.hash(&mut hasher);
+                    let hash = hasher.finish();
+
+                    let conn = connect();
+                    let mut cursor = conn.prepare(format!("
+                        SELECT 1 FROM items
+                        WHERE hash = '{}'
+                    ", hash)).unwrap().cursor();
+                    match cursor.next() {
+                        Ok(result) => {
+                            match result {
+                                Some(_) => {
+                                    println!("skipping {}", hash)
+                                },
+                                None => {
+                                    println!("sending {}", hash);
+                                    let sql = format!("
+                                        INSERT INTO items (hash)
+                                        VALUES ('{}')
+                                    ", hash);
+                                    conn.execute(sql).unwrap();
+
+                                    let subject = format!("
+                                        [rss2email] {}
+                                    ", item.title);
+                                    let text = format!("
+                                        <div>
+                                            <h1>
+                                                <a href='{}'>{}</a>
+                                            </h1>
+                                            <p>
+                                                {}
+                                            </p>
+                                        </div>
+                                    ", item.link, item.title, item.desc);
+                                    let mail = Mail::new()
+                                        .add_from("jan@kroeze.io")
+                                        .add_html(&text)
+                                        .add_subject(&subject)
+                                        .add_to(("jcwkroeze@pm.me", "Jan CW Kroeze").into());
+                                    client.send(mail).unwrap();
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            println!("{}", e);
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -129,13 +184,18 @@ fn poll_all() {
         FROM feeds
     ");
 
+    let mut urls = Vec::new();
     let conn = connect();
     conn.iterate(sql, |pairs| {
         for &(_, value) in pairs.iter() {
-            poll(&client, value.unwrap());
+            urls.push(value.unwrap().to_string());
         }
         true
     }).unwrap();
+
+    for url in urls {
+        poll(&client, url);
+    }
 }
 
 fn remove(pk: i32) {
