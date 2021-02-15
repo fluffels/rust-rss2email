@@ -48,7 +48,7 @@ impl Item {
 }
 
 fn connect() -> sqlite::Connection {
-    let conn = sqlite::open("db").unwrap();
+    let conn = sqlite::open("db/db.sqlite").unwrap();
 
     conn.execute("
         CREATE TABLE IF NOT EXISTS feeds (

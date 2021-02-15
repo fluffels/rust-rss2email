@@ -4,9 +4,13 @@ version = "0.1.0"
 authors = ["Jan CW Kroeze <jcwkroeze@pm.me>"]
 edition = "2018"
 
+[[bin]]
+name = "rss2email"
+path = "src/main.rs"
+
 [dependencies]
 docopt = "1.1.0"
-reqwest = { version = "0.11", features = ["blocking"] }
+reqwest = { version = "0.11.0", default-features = false, features = ["blocking", "rustls-tls"] }
 sendgrid = "0.16.0"
 serde = "1.0.123"
 sqlite = "0.25.3"
